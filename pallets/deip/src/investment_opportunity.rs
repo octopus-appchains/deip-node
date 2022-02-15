@@ -171,7 +171,7 @@ impl<T: Config> Module<T> {
             ..Default::default()
         };
 
-        SimpleCrowdfundingMap::<T>::insert(external_id, new_token_sale.clone());
+        SimpleCrowdfundingMap::<T>::insert(external_id, new_token_sale);
 
         Self::deposit_event(RawEvent::SimpleCrowdfundingCreated(external_id));
 

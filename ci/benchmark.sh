@@ -21,7 +21,7 @@ docker run --rm --init -t $APP_IMAGE \
     --execution wasm \
     --wasm-execution compiled \
     --pallet $PALLETS \
-    --extrinsic '*' \
+    --extrinsic 'create_investment_opportunity' \
     --steps 50 \
     --repeat 20 \
     --heap-pages 4096 \

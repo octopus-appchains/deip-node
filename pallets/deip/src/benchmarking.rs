@@ -28,6 +28,7 @@ use pallet_deip_assets::{
 use pallet_assets::Config as AssetsConfig;
 use deip_projects_info::DeipProjectsInfo;
 use pallet_balances::Config as BalancesConfig;
+use deip_serializable_u128::SerializableAtLeast32BitUnsigned;
 
 const SEED: u32 = 0;
 
@@ -97,23 +98,23 @@ fn _create_project<T: Config>(project: ProjectOf<T>) -> ProjectOf<T> {
 }
 
 fn create_project_asset<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
-	project: &ProjectOf<T>
+    project: &ProjectOf<T>
 ) -> DispatchResultWithPostInfo
 {
-	pallet_balances::Pallet::<T>::set_balance(
+    pallet_balances::Pallet::<T>::set_balance(
         RawOrigin::Root.into(),
         T::Lookup::unlookup(project.team_id.clone()),
         <T as BalancesConfig>::Balance::max_value(),
         <T as BalancesConfig>::Balance::from(0u16),
     ).unwrap();
-	DeipAssets::<T>::deip_create_asset(
+    DeipAssets::<T>::deip_create_asset(
         RawOrigin::Signed(project.team_id.clone()).into(),
         T::AssetIdInit::asset_id(project.external_id.as_bytes()),
         project.team_id.clone().into(),
         <T as AssetsConfig>::Balance::from(200u16),
         Some(ProjectsInfoOf::<T>::project_id(project.external_id.as_bytes()))
     ).unwrap();
-	Ok(None.into())
+    Ok(None.into())
 }
 
 fn init_project_content<T: Config>(
@@ -339,6 +340,27 @@ benchmarks! {
         ).into());
     }
 
+    create_investment_opportunity {
+        let crowdfunding = init_simple_crowdfunding::<T>(1);
+        let PreSimpleCrowdfunding::<T> {
+            investment,
+            funding_model,
+            shares
+        } = pre_simple_crowdfunding::<T>(crowdfunding, whitelisted_caller());
+
+        let external_id = investment.sale_id.clone();
+
+    }: _(RawOrigin::Signed(investment.owner.clone()),
+            external_id,
+            investment.owner.clone().into(),
+            shares,
+            funding_model)
+    verify {
+        assert_last_event::<T>(Event::<T>::SimpleCrowdfundingCreated(
+            external_id
+        ).into());
+    }
+
     update_project {
         let project = init_project::<T>(0, 0);
         let project = _create_project::<T>(project);
@@ -552,7 +574,7 @@ benchmarks! {
     //     let domain = init_domain(1);
     //     let account: T::AccountId = whitelisted_caller();
     //     let external_id = domain.external_id;
-    // 
+    //
     // }: _(RawOrigin::Signed(account.clone()), domain)
     // verify {
     //     assert_last_event::<T>(Event::<T>::DomainAdded(
@@ -652,7 +674,7 @@ benchmarks! {
     accept_contract_agreement_project_license_signed_by_licenser {
         let project = init_project::<T>(1, 0);
         let project = _create_project::<T>(project);
-		create_project_asset::<T>(&project)?;
+        create_project_asset::<T>(&project)?;
 
         let terms = init_license_agreement::<T>(
             &project,
@@ -954,7 +976,7 @@ fn _add_balance<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
         <T as BalancesConfig>::Balance::from(0u16),
     ).unwrap();
 
-	let asset_admin: <T as DeipAssetsConfig>::DeipAccountId = party.clone().into();
+    let asset_admin: <T as DeipAssetsConfig>::DeipAccountId = party.clone().into();
     let min_balance = <T as AssetsConfig>::Balance::from(200u16);
 
     DeipAssets::<T>::deip_create_asset(
@@ -965,12 +987,153 @@ fn _add_balance<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
         None
     ).unwrap();
 
-	DeipAssets::<T>::deip_issue_asset(
-		RawOrigin::Signed(party.clone()).into(),
-		asset_id,
-		asset_admin,
-		min_balance
-	)?;
+    DeipAssets::<T>::deip_issue_asset(
+        RawOrigin::Signed(party.clone()).into(),
+        asset_id,
+        asset_admin,
+        min_balance
+    )?;
 
     Ok(None.into())
+}
+
+fn init_investment_opportunity<T: Config>(idx: u8) -> InvestmentOf<T> {
+    let sale_id: InvestmentId = InvestmentId::from([idx; 20]);
+    let owner: T::AccountId = whitelisted_caller();
+    let amount = DeipAssetBalanceOf::<T>::from(200u16);
+    let time = T::Moment::from(1u16).mul(T::BlockNumber::from(10u16));
+    InvestmentOf::<T> {
+        sale_id,
+        owner,
+        amount,
+        time,
+    }
+}
+
+fn init_funding_model<T: Config>(investment: &InvestmentOf<T>) -> FundingModelOf<T> {
+    let start_time: T::Moment = now::<T>();
+    let end_time: T::Moment = start_time + investment.time;
+
+    let asset_id = T::AssetSystem::asset_id([1u8; 20].as_slice());
+
+    let soft_cap = DeipAssetOf::<T>::new(asset_id, DeipAssetBalanceOf::<T>::from(100u16));
+    let hard_cap = DeipAssetOf::<T>::new(asset_id, DeipAssetBalanceOf::<T>::from(200u16));
+    FundingModelOf::<T>::SimpleCrowdfunding {
+        start_time,
+        end_time,
+        soft_cap,
+        hard_cap
+    }
+}
+
+fn _create_simple_crowdfunding<T: Config>(
+    investment: InvestmentOf<T>,
+    funding_model: FundingModelOf<T>,
+    shares: Vec<DeipAssetOf<T>>,
+) -> Result<SimpleCrowdfundingOf<T>, DispatchError>
+{
+    let InvestmentOf::<T> {
+        sale_id,
+        owner,
+        amount: _,
+        time: _
+    } = investment;
+    Pallet::<T>::create_investment_opportunity(
+        RawOrigin::Signed(owner.clone()).into(),
+        sale_id,
+        owner.into(),
+        shares,
+        funding_model
+    )?;
+    Ok(SimpleCrowdfundingMap::<T>::get(sale_id))
+}
+
+type CrowdfundingBalance<T> = SerializableAtLeast32BitUnsigned<DeipAssetBalanceOf<T>>;
+
+fn init_simple_crowdfunding<T: Config>(idx: u8) -> SimpleCrowdfundingOf<T> {
+    let created_ctx: TransactionCtxId<TransactionCtxOf<T>> =
+        Default::default();
+
+    let external_id: InvestmentId =
+        InvestmentId::from([idx; 20]);
+
+    let start_time: T::Moment
+        = now::<T>();
+
+    use sp_runtime::traits::One;
+    let end_time: T::Moment =
+        start_time + T::Moment::one().mul(T::BlockNumber::from(10u16));
+
+    let status: SimpleCrowdfundingStatus =
+        SimpleCrowdfundingStatus::Active;
+
+    let asset_id: crate::DeipAssetIdOf<T> =
+        T::AssetSystem::asset_id([38; 20].as_slice());
+
+    let total_amount: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(200u16));
+
+    let soft_cap: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(100u16));
+
+    let hard_cap: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(200u16));
+
+    let shares: Vec<DeipAssetOf<T>> = vec![];
+
+    SimpleCrowdfundingOf::<T> {
+        created_ctx,
+        external_id,
+        start_time,
+        end_time,
+        status,
+        asset_id,
+        total_amount,
+        soft_cap,
+        hard_cap,
+        shares,
+    }
+}
+
+struct PreSimpleCrowdfunding<T: Config> {
+    investment: InvestmentOf<T>,
+    funding_model: FundingModelOf<T>,
+    shares: Vec<DeipAssetOf<T>>,
+}
+
+fn pre_simple_crowdfunding<T: Config>(
+    crowdfunding: SimpleCrowdfundingOf<T>,
+    investment_owner: T::AccountId,
+) -> PreSimpleCrowdfunding<T>
+{
+    let SimpleCrowdfundingOf::<T> {
+        created_ctx: _,
+        external_id,
+        start_time,
+        end_time,
+        status: _,
+        asset_id,
+        total_amount,
+        soft_cap,
+        hard_cap,
+        shares,
+    } = crowdfunding;
+
+    let investment = InvestmentOf::<T> {
+        sale_id: external_id,
+        owner: investment_owner,
+        amount: total_amount.0,
+        time: end_time - start_time,
+    };
+    let funding_model = FundingModelOf::<T>::SimpleCrowdfunding {
+        start_time,
+        end_time,
+        soft_cap: DeipAssetOf::<T>::new(asset_id, soft_cap.0),
+        hard_cap: DeipAssetOf::<T>::new(asset_id, hard_cap.0),
+    };
+    PreSimpleCrowdfunding::<T> {
+        investment,
+        funding_model,
+        shares
+    }
 }
