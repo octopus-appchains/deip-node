@@ -341,7 +341,8 @@ benchmarks! {
     }
 
     create_investment_opportunity {
-        let crowdfunding = init_simple_crowdfunding::<T>(1);
+        let s in 1 .. 50;
+        let crowdfunding = init_simple_crowdfunding::<T>(1, s as u8);
         let PreSimpleCrowdfunding::<T> {
             investment,
             funding_model,
@@ -1050,7 +1051,7 @@ fn _create_simple_crowdfunding<T: Config>(
 
 type CrowdfundingBalance<T> = SerializableAtLeast32BitUnsigned<DeipAssetBalanceOf<T>>;
 
-fn init_simple_crowdfunding<T: Config>(idx: u8) -> SimpleCrowdfundingOf<T> {
+fn init_simple_crowdfunding<T: Config>(idx: u8, shares: u8) -> SimpleCrowdfundingOf<T> {
     let created_ctx: TransactionCtxId<TransactionCtxOf<T>> =
         Default::default();
 
@@ -1079,7 +1080,13 @@ fn init_simple_crowdfunding<T: Config>(idx: u8) -> SimpleCrowdfundingOf<T> {
     let hard_cap: CrowdfundingBalance<T> =
         SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(200u16));
 
-    let shares: Vec<DeipAssetOf<T>> = vec![];
+    let shares: Vec<DeipAssetOf<T>> =
+        (0..shares).map(|x| {
+            DeipAssetOf::<T>::new(
+                T::AssetSystem::asset_id([x; 20].as_slice()),
+                DeipAssetBalanceOf::<T>::from(x as u16 * 100)
+            )
+        }).collect();
 
     SimpleCrowdfundingOf::<T> {
         created_ctx,
