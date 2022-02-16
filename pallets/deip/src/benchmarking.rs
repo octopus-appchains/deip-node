@@ -9,10 +9,11 @@ use frame_support::{traits::Get};
 use frame_benchmarking::{benchmarks, account, whitelisted_caller, whitelist_account};
 use sp_std::prelude::*;
 use core::convert::TryInto;
+use frame_support::weights::PostDispatchInfo;
 use sp_core::H160;
 
 use crate::Pallet;
-use sp_runtime::traits::{Hash, Scale, StaticLookup};
+use sp_runtime::traits::{Hash, Saturating, Scale, StaticLookup};
 use crate::contract::{
     License, LicenseOf, LicenseStatus,
     TermsOf, Terms,
@@ -998,6 +999,45 @@ fn _add_balance<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
     Ok(None.into())
 }
 
+fn _create_asset<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
+    asset_id: pallet_deip_assets::DeipAssetIdOf<T>,
+    admin: T::AccountId,
+    min_balance: <T as AssetsConfig>::Balance,
+) -> DispatchResultWithPostInfo
+{
+    pallet_balances::Pallet::<T>::set_balance(
+        RawOrigin::Root.into(),
+        T::Lookup::unlookup(admin.clone()),
+        <T as BalancesConfig>::Balance::max_value(),
+        <T as BalancesConfig>::Balance::min_value(),
+    )?;
+
+    let asset_admin: <T as DeipAssetsConfig>::DeipAccountId = admin.clone().into();
+
+    DeipAssets::<T>::deip_create_asset(
+        RawOrigin::Signed(admin).into(),
+        asset_id,
+        asset_admin,
+        min_balance,
+        None
+    )
+}
+
+fn _issue_asset<T: Config + AssetsConfig + DeipAssetsConfig + BalancesConfig>(
+    asset_id: pallet_deip_assets::DeipAssetIdOf<T>,
+    admin: T::AccountId,
+    beneficiary: T::AccountId,
+    amount: <T as AssetsConfig>::Balance,
+) -> DispatchResultWithPostInfo
+{
+    DeipAssets::<T>::deip_issue_asset(
+        RawOrigin::Signed(admin).into(),
+        asset_id,
+        beneficiary.into(),
+        amount
+    )
+}
+
 fn init_investment_opportunity<T: Config>(idx: u8) -> InvestmentOf<T> {
     let sale_id: InvestmentId = InvestmentId::from([idx; 20]);
     let owner: T::AccountId = whitelisted_caller();
@@ -1051,7 +1091,11 @@ fn _create_simple_crowdfunding<T: Config>(
 
 type CrowdfundingBalance<T> = SerializableAtLeast32BitUnsigned<DeipAssetBalanceOf<T>>;
 
-fn init_simple_crowdfunding<T: Config>(idx: u8, shares: u8) -> SimpleCrowdfundingOf<T> {
+fn init_simple_crowdfunding<T: Config + BalancesConfig + DeipAssetsConfig>(
+    idx: u8,
+    shares: u8,
+) -> SimpleCrowdfundingOf<T>
+{
     let created_ctx: TransactionCtxId<TransactionCtxOf<T>> =
         Default::default();
 
@@ -1061,7 +1105,7 @@ fn init_simple_crowdfunding<T: Config>(idx: u8, shares: u8) -> SimpleCrowdfundin
     let start_time: T::Moment
         = now::<T>();
 
-    use sp_runtime::traits::One;
+    use sp_runtime::traits::{One, Zero};
     let end_time: T::Moment =
         start_time + T::Moment::one().mul(T::BlockNumber::from(10u16));
 
@@ -1069,24 +1113,31 @@ fn init_simple_crowdfunding<T: Config>(idx: u8, shares: u8) -> SimpleCrowdfundin
         SimpleCrowdfundingStatus::Active;
 
     let asset_id: crate::DeipAssetIdOf<T> =
-        T::AssetSystem::asset_id([38; 20].as_slice());
+        T::AssetSystem::asset_id(external_id.as_bytes());
 
-    let total_amount: CrowdfundingBalance<T> =
-        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(200u16));
-
-    let soft_cap: CrowdfundingBalance<T> =
-        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(100u16));
-
-    let hard_cap: CrowdfundingBalance<T> =
-        SerializableAtLeast32BitUnsigned(DeipAssetBalanceOf::<T>::from(200u16));
-
+    let share_ratio = 10u16;
     let shares: Vec<DeipAssetOf<T>> =
-        (0..shares).map(|x| {
+        (1..shares+1).map(|i| {
             DeipAssetOf::<T>::new(
-                T::AssetSystem::asset_id([x; 20].as_slice()),
-                DeipAssetBalanceOf::<T>::from(x as u16 * 100)
+                T::AssetSystem::asset_id([idx+i; 20].as_slice()),
+                DeipAssetBalanceOf::<T>::from(i as u16 * share_ratio)
             )
         }).collect();
+
+    let total_amount = shares.iter()
+        .map(|x| DeipAssetBalanceOf::<T>::from(*x.amount()))
+        .fold(DeipAssetBalanceOf::<T>::zero(), |acc,  x| acc + x);
+    let soft_cap = total_amount;// - DeipAssetBalanceOf::<T>::from(share_ratio);
+    let hard_cap = total_amount;
+
+    let total_amount: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(total_amount);
+
+    let soft_cap: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(soft_cap);
+
+    let hard_cap: CrowdfundingBalance<T> =
+        SerializableAtLeast32BitUnsigned(hard_cap);
 
     SimpleCrowdfundingOf::<T> {
         created_ctx,
@@ -1108,7 +1159,7 @@ struct PreSimpleCrowdfunding<T: Config> {
     shares: Vec<DeipAssetOf<T>>,
 }
 
-fn pre_simple_crowdfunding<T: Config>(
+fn pre_simple_crowdfunding<T: Config + DeipAssetsConfig + BalancesConfig>(
     crowdfunding: SimpleCrowdfundingOf<T>,
     investment_owner: T::AccountId,
 ) -> PreSimpleCrowdfunding<T>
@@ -1125,6 +1176,33 @@ fn pre_simple_crowdfunding<T: Config>(
         hard_cap,
         shares,
     } = crowdfunding;
+
+    use sp_runtime::traits::{Zero, One};
+    _create_asset::<T>(
+        T::AssetIdInit::asset_id(external_id.as_bytes()),
+        investment_owner.clone(),
+        <_>::one()
+    ).unwrap();
+    _issue_asset::<T>(
+        T::AssetIdInit::asset_id(external_id.as_bytes()),
+        investment_owner.clone(),
+        investment_owner.clone(),
+        <T as AssetsConfig>::Balance::from(unsafe { TryInto::<u16>::try_into(total_amount.0).unwrap_unchecked() }),
+    ).unwrap();
+
+    shares.iter().for_each(|x| {
+        _create_asset::<T>(
+            T::AssetIdInit::asset_id(x.id().as_ref()),
+            investment_owner.clone(),
+            <_>::one()
+        ).unwrap();
+        _issue_asset::<T>(
+            T::AssetIdInit::asset_id(x.id().as_ref()),
+            investment_owner.clone(),
+            investment_owner.clone(),
+            <T as AssetsConfig>::Balance::from(unsafe { TryInto::<u16>::try_into(*x.amount()).unwrap_unchecked() }),
+        ).unwrap();
+    });
 
     let investment = InvestmentOf::<T> {
         sale_id: external_id,

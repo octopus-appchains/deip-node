@@ -588,7 +588,10 @@ decl_module! {
         /// - `project_id`: id of the project which tokens are intended to sale.
         /// - `investment_type`: specifies type of created investment opportunity. For possible
         /// variants and details see [`FundingModel`].
-        #[weight = 10_000]
+        #[weight = {
+            let s = shares.len() as u32;
+            T::DeipWeightInfo::create_investment_opportunity(s)
+        }]
         fn create_investment_opportunity(origin,
             external_id: InvestmentId,
             creator: T::DeipAccountId,

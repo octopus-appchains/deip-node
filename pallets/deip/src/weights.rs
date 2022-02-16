@@ -34,6 +34,7 @@ use sp_std::marker::PhantomData;
 
 pub trait WeightInfo {
     fn create_project(d: u32) -> Weight;
+    fn create_investment_opportunity(s: u32) -> Weight;
     fn update_project() -> Weight;
     fn create_project_content(a: u32, r: u32) -> Weight;
     fn create_project_nda(p: u32) -> Weight;
@@ -65,6 +66,24 @@ impl<T: frame_system::Config> WeightInfo for Weights<T> {
             .saturating_add(T::DbWeight::get().reads(1 as Weight))
             .saturating_add(T::DbWeight::get().reads((1 as Weight).saturating_mul(d as Weight)))
             .saturating_add(T::DbWeight::get().writes(2 as Weight))
+    }
+    // Storage: Timestamp Now (r:1 w:0)
+    // Storage: Deip SimpleCrowdfundingMap (r:1 w:1)
+    // Storage: Assets InvestmentMap (r:1 w:1)
+    // Storage: System Account (r:1 w:1)
+    // Storage: Assets AssetIdByDeipAssetId (r:2 w:0)
+    // Storage: ParityTechAssets Asset (r:1 w:1)
+    // Storage: ParityTechAssets Account (r:2 w:2)
+    // Storage: Assets InvestmentByAssetId (r:2 w:2)
+    // Storage: unknown [0x3a65787472696e7369635f696e646578] (r:1 w:0)
+    fn create_investment_opportunity(s: u32) -> Weight {
+        (62_900_000 as Weight)
+            // Standard Error: 139_000
+            .saturating_add((69_879_000 as Weight).saturating_mul(s as Weight))
+            .saturating_add(T::DbWeight::get().reads(6 as Weight))
+            .saturating_add(T::DbWeight::get().reads((6 as Weight).saturating_mul(s as Weight)))
+            .saturating_add(T::DbWeight::get().writes(4 as Weight))
+            .saturating_add(T::DbWeight::get().writes((4 as Weight).saturating_mul(s as Weight)))
     }
     // Storage: Deip ProjectMap (r:1 w:1)
     fn update_project() -> Weight {
