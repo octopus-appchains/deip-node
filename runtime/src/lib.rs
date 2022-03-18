@@ -6,7 +6,7 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
-use beefy_primitives::{crypto::AuthorityId as BeefyId, ValidatorSet};
+use beefy_primitives::{crypto::AuthorityId as BeefyId, mmr::MmrLeafVersion, ValidatorSet};
 pub use frame_support::{
     construct_runtime,
     pallet_prelude::{
@@ -39,10 +39,16 @@ use sp_api::{impl_runtime_apis, BlockT, NumberFor, RuntimeVersion};
 use sp_core::OpaqueMetadata;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
-use sp_runtime::{create_runtime_str, generic::{self, Era}, impl_opaque_keys, traits::{
-    AccountIdLookup, BlakeTwo256, ConvertInto, Extrinsic, IdentifyAccount, Keccak256,
-    OpaqueKeys, SaturatedConversion, StaticLookup, Verify,
-}, ApplyExtrinsicResult, KeyTypeId, MultiSignature};
+use sp_runtime::{
+    create_runtime_str,
+    generic::{self, Era},
+    impl_opaque_keys,
+    traits::{
+        AccountIdLookup, BlakeTwo256, ConvertInto, Extrinsic, IdentifyAccount, Keccak256,
+        OpaqueKeys, SaturatedConversion, StaticLookup, Verify,
+    },
+    ApplyExtrinsicResult, KeyTypeId, MultiSignature,
+};
 pub use sp_runtime::{Perbill, Permill};
 use sp_std::prelude::*;
 #[cfg(feature = "std")]
@@ -129,7 +135,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     //   `spec_version`, and `authoring_version` are the same between Wasm and native.
     // This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
     //   the compatible custom types.
-    spec_version: 101,
+    spec_version: 102,
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1,
@@ -152,7 +158,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
 /// `SLOT_DURATION` should have the same value.
 ///
 /// <https://research.web3.foundation/en/latest/polkadot/block-production/Babe.html#-6.-practical-results>
-pub const MILLISECS_PER_BLOCK: Moment = 3000;
+pub const MILLISECS_PER_BLOCK: Moment = 6000;
 pub const SECS_PER_BLOCK: Moment = MILLISECS_PER_BLOCK / 1000;
 
 // NOTE: Currently it is not possible to change the slot duration after the chain has started.
@@ -164,7 +170,7 @@ pub const PRIMARY_PROBABILITY: (u64, u64) = (1, 4);
 
 // NOTE: Currently it is not possible to change the epoch duration after the chain has started.
 //       Attempting to do so will brick block production.
-pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 10 * MINUTES;
+pub const EPOCH_DURATION_IN_BLOCKS: BlockNumber = 4 * HOURS;
 pub const EPOCH_DURATION_IN_SLOTS: u64 = {
     const SLOT_FILL_RATE: f64 = MILLISECS_PER_BLOCK as f64 / SLOT_DURATION as f64;
 
@@ -175,7 +181,6 @@ pub const EPOCH_DURATION_IN_SLOTS: u64 = {
 pub const MINUTES: BlockNumber = 60 / (SECS_PER_BLOCK as BlockNumber);
 pub const HOURS: BlockNumber = MINUTES * 60;
 pub const DAYS: BlockNumber = HOURS * 24;
-
 
 pub mod currency {
     use super::Balance;
@@ -401,7 +406,7 @@ impl pallet_babe::Config for Runtime {
 }
 
 parameter_types! {
-    pub const UncleGenerations: BlockNumber = 5;
+    pub const UncleGenerations: BlockNumber = 0;
 }
 
 impl pallet_authorship::Config for Runtime {
@@ -527,15 +532,15 @@ impl pallet_mmr::Config for Runtime {
     const INDEXING_PREFIX: &'static [u8] = b"mmr";
     type Hashing = Keccak256;
     type Hash = MmrHash;
-    type LeafData = frame_system::Pallet<Self>;
-    type OnNewRoot = DepositLog;
+    type LeafData = pallet_beefy_mmr::Pallet<Self>;
+    type OnNewRoot = pallet_beefy_mmr::DepositBeefyDigest<Self>;
     type WeightInfo = ();
 }
 
 parameter_types! {
     pub const AssetDeposit: Balance = 100 * currency::UNITS;
     pub const ApprovalDeposit: Balance = 1 * currency::UNITS;
-    pub const StringLimit: u32 = 50;
+    pub const StringLimit: u32 = 200;
     pub const MetadataDepositBase: Balance = 10 * currency::UNITS;
     pub const MetadataDepositPerByte: Balance = 1 * currency::UNITS;
 }
@@ -606,10 +611,10 @@ parameter_types! {
     pub const DepositPerByte: Balance = 10 * currency::UNITS;
 
     /// The maximum length of an attribute key.
-    pub const KeyLimit: u32 = 50;
+    pub const KeyLimit: u32 = 100;
 
     /// The maximum length of an attribute value.
-    pub const ValueLimit: u32 = 50;
+    pub const ValueLimit: u32 = 200;
 
     /// Greater class ids will be reserved for `deip_*` calls.
     pub const MaxOriginClassId: NftClassId = NftClassId::MAX / 2;
@@ -636,13 +641,23 @@ impl pallet_deip_uniques::Config for Runtime {
     type DeipNftClassId = DeipNftClassId;
     type DeipAccountId = deip_account::DeipAccountId<<Self as frame_system::Config>::AccountId>;
     type ProjectId = pallet_deip::ProjectId;
-    type UniquesNftClassId = <Self as pallet_uniques::Config>::ClassId;
+    type NftClassId = <Self as pallet_uniques::Config>::ClassId;
     type ProjectsInfo = Self;
     type MaxOriginClassId = MaxOriginClassId;
 }
 
 impl pallet_beefy::Config for Runtime {
     type BeefyId = BeefyId;
+}
+
+parameter_types! {
+    pub LeafVersion: MmrLeafVersion = MmrLeafVersion::new(0,0);
+}
+
+impl pallet_beefy_mmr::Config for Runtime {
+    type LeafVersion = LeafVersion;
+    type BeefyAuthorityToMerkleLeaf = pallet_beefy_mmr::BeefyEcdsaToEthereum;
+    type ParachainHeads = ();
 }
 
 pub struct OctopusAppCrypto;
@@ -657,8 +672,8 @@ impl frame_system::offchain::AppCrypto<<Signature as Verify>::Signer, Signature>
 
 parameter_types! {
     pub const OctopusAppchainPalletId: PalletId = PalletId(*b"py/octps");
-    pub const GracePeriod: u32 = 5;
-    pub const UnsignedPriority: u64 = 1 << 20;
+    pub const GracePeriod: u32 = 10;
+    pub const UnsignedPriority: u64 = 1 << 21;
     pub const RequestEventLimit: u32 = 10;
     pub const UpwardMessagesLimit: u32 = 10;
 }
@@ -685,7 +700,7 @@ parameter_types! {
         pub const SessionsPerEra: sp_staking::SessionIndex = 6;
         pub const BondingDuration: pallet_octopus_lpos::EraIndex = 24 * 28;
 //         pub OffchainRepeat: BlockNumber = 5;
-        pub const BlocksPerEra: u32 = EPOCH_DURATION_IN_BLOCKS * 6 / (SECS_PER_BLOCK as u32);
+        pub const BlocksPerEra: u32 = EPOCH_DURATION_IN_BLOCKS * 6;
 }
 
 impl pallet_octopus_lpos::Config for Runtime {
@@ -721,6 +736,7 @@ pub type TransactionCtxId = pallet_deip_portal::TransactionCtxId<TransactionCtx>
 
 parameter_types! {
     pub const MaxNdaParties: u16 = 50;
+    pub const MaxInvestmentShares: u16 = 10;
 }
 
 impl pallet_deip::Config for Runtime {
@@ -731,6 +747,7 @@ impl pallet_deip::Config for Runtime {
     type AssetSystem = Self;
     type DeipWeightInfo = pallet_deip::Weights<Self>;
     type MaxNdaParties = MaxNdaParties;
+    type MaxInvestmentShares = MaxInvestmentShares;
 }
 
 parameter_types! {
@@ -916,6 +933,7 @@ construct_runtime!(
         ParityTechUniques: pallet_uniques::{Pallet, Storage, Event<T>},
         Mmr: pallet_mmr::{Pallet, Storage},
         Beefy: pallet_beefy::{Pallet, Config<T>},
+        MmrLeaf: pallet_beefy_mmr,
         Multisig: pallet_multisig::{Pallet, Call, Storage, Event<T>},
         Utility: pallet_utility::{Pallet, Call, Event},
         Deip: pallet_deip::{Pallet, Call, Storage, Event<T>, Config, ValidateUnsigned},
@@ -1290,10 +1308,6 @@ impl_runtime_apis! {
 
         fn get_review(id: &pallet_deip::ReviewId) -> Option<pallet_deip::ReviewOf<crate::Runtime>> {
             Deip::get_review(id)
-        }
-
-        fn get_investment_opportunity(id: &InvestmentId) -> Option<pallet_deip::SimpleCrowdfundingOf<crate::Runtime>> {
-            Deip::get_investment_opportunity(id)
         }
 
         fn get_contract_agreement(id: &pallet_deip::ContractAgreementId) -> Option<pallet_deip::ContractAgreementOf<crate::Runtime>> {
